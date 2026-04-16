@@ -179,50 +179,14 @@ openpyxl>=3.1
 
 ---
 
-### 🔵 Phase 3 — Stretch Goals (if time permits)
+### 🔵 Phase 3 — Future plans
 
-**Priority order** — items at the top have the most impact for demo quality or real-world usefulness.
+If time permits during the hackathon, the top two stretch goals are:
 
-#### 🥇 High priority
+1. **Unstructured file ingestion** — ingest the 23 binary-format documents (PDF, DOCX, XLSX) into the same pipeline
+2. **Cross-corpus contradiction detection** — flag when the same policy value appears with different amounts across the structured and unstructured corpora
 
-| Goal | Description | Effort | Why it matters |
-|---|---|---|---|
-| **Replace Streamlit with a proper frontend** | Streamlit is fast for prototyping but limited for a realistic caseworker tool. A **React + FastAPI** stack would give full control over layout, accessibility, keyboard navigation, and responsiveness. Alternatively, **Next.js** with a Python API backend hits a good balance of speed and quality. | High | Streamlit feels like a demo. A React UI feels like a product. Critical for judge impression and real adoption. |
-| **Export to JSON API** | FastAPI endpoint exposing `GET /search?q=...` and `GET /document/{id}` — makes the extraction layer usable by other services and developers, not just the UI | Medium | Directly addresses the developer/service team user need from the challenge spec |
-| **Cross-corpus contradiction detection** | Detect when the same policy value (e.g. housing benefit capital limit, minimum wage rate) appears with different values across structured and unstructured documents | Medium | High demo impact — shows the tool catching a real data quality problem |
-| **GOV.UK Content API integration** | Allow a user to enter a GOV.UK path and pull live content into the index alongside local documents | Medium | Demonstrates real-world scalability beyond the 20 starter documents |
-
-#### 🥈 Medium priority
-
-| Goal | Description | Effort | Why it matters |
-|---|---|---|---|
-| **Passage confidence explanation** | Show the top TF-IDF terms that drove a result's score ("matched on: housing benefit, self-employed, income") | Low | Helps caseworkers trust or distrust a result — transparency in ranking |
-| **Search history / recent queries** | Store the last N searches in session state so a caseworker can revisit queries during a call | Low | Small UX improvement, realistic for the primary user persona |
-| **Document version timeline** | For any document that has been superseded, show a visual timeline of versions with dates | Medium | Directly addresses the "which version is current?" problem |
-| **Keyword highlighting in full document view** | When a user expands to read the full section, highlight the matched terms | Low | Standard search UX, significantly improves readability |
-
-#### 🥉 Lower priority (if significant time remains)
-
-| Goal | Description | Effort | Why it matters |
-|---|---|---|---|
-| **Embeddings-based semantic search** | Replace or augment TF-IDF with sentence embeddings (e.g. `sentence-transformers`) for better handling of synonyms and paraphrased queries | High | Meaningful quality improvement but requires a model or library; overkill for demo scope |
-| **GOV.UK Design System styling** | Apply GOV.UK frontend styles (colour palette, typography, components) to the UI so it looks like a real government service | Medium | Strong visual signal for judges that you understand the context |
-| **Admin / policy owner view** | A separate view showing data quality summary across all documents — stale count, contradiction count, metadata gaps — for the policy owner persona | Medium | Addresses the fourth user from the challenge spec who currently has no visibility |
-| **Feedback mechanism** | Thumbs up/down on results, stored locally — simulates the feedback loop a real service would need | Low | Shows product thinking beyond the prototype |
-
----
-
-#### Frontend recommendation
-
-If rebuilding the UI, the recommended stack for this use case is:
-
-```
-Frontend:  Next.js (React) — fast to build, good accessibility defaults, easy deployment
-Backend:   FastAPI (Python) — keeps all existing extraction/search code, adds a REST layer
-Styling:   GOV.UK Frontend (govuk-frontend npm package) — makes it look like a real service
-```
-
-This separates concerns cleanly: the Python search logic stays unchanged, the frontend calls the API. A developer on the team could scaffold a Next.js app and connect it to a FastAPI `/search` endpoint in under an hour, leaving the caseworker UI as the focus.
+Everything beyond those two items — frontend replacement with Next.js + FastAPI, GOV.UK Design System styling, GOV.UK Content API integration, semantic search, and the policy owner dashboard — is documented and prioritised in **[FUTURE-PLANS.md](./FUTURE-PLANS.md)**.
 
 ---
 
