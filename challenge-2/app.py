@@ -26,9 +26,187 @@ from src.indexer import DocumentIndex, build_merged
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="GovDoc Search",
+    page_title="GovDoc Search — Government Document Search",
     page_icon="🏛️",
     layout="wide",
+)
+
+# ---------------------------------------------------------------------------
+# GOV.UK Design System styling
+# Colours from https://design-system.service.gov.uk/styles/colour/
+# Font: GDS Transport (falls back to Arial as per GOV.UK standard)
+# ---------------------------------------------------------------------------
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;700&display=swap');
+
+    /* ── Base typography (GDS Transport fallback stack) ── */
+    html, body, [class*="css"] {
+        font-family: "GDS Transport", "Noto Sans", Arial, sans-serif !important;
+        font-size: 16px;
+        line-height: 1.5;
+        color: #0b0c0c;
+    }
+
+    /* ── Page background ── */
+    .stApp {
+        background-color: #f3f2f1;
+    }
+    .block-container {
+        background-color: #ffffff;
+        padding: 2rem 2.5rem;
+        max-width: 1200px;
+    }
+
+    /* ── Black GOV.UK header bar ── */
+    header[data-testid="stHeader"] {
+        background-color: #0b0c0c !important;
+    }
+
+    /* ── Sidebar ── */
+    section[data-testid="stSidebar"] {
+        background-color: #f3f2f1 !important;
+        border-right: 4px solid #1d70b8;
+    }
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] p,
+    section[data-testid="stSidebar"] label {
+        color: #0b0c0c !important;
+    }
+
+    /* ── Headings ── */
+    h1 {
+        font-size: 2rem !important;
+        font-weight: 700 !important;
+        color: #0b0c0c !important;
+        border-bottom: 4px solid #1d70b8;
+        padding-bottom: 0.5rem;
+        margin-bottom: 1rem;
+    }
+    h2 { font-size: 1.5rem !important; font-weight: 700 !important; color: #0b0c0c !important; }
+    h3 { font-size: 1.125rem !important; font-weight: 700 !important; color: #0b0c0c !important; }
+
+    /* ── Primary button (GOV.UK green) ── */
+    .stButton > button {
+        background-color: #00703c !important;
+        color: #ffffff !important;
+        border: 2px solid #00703c !important;
+        border-radius: 0 !important;
+        font-weight: 700 !important;
+        font-size: 1rem !important;
+        padding: 8px 16px !important;
+        box-shadow: 0 2px 0 #002d18 !important;
+    }
+    .stButton > button:hover {
+        background-color: #005a30 !important;
+        border-color: #005a30 !important;
+    }
+
+    /* ── Text input (GOV.UK input style) ── */
+    .stTextInput > div > div > input {
+        border: 2px solid #0b0c0c !important;
+        border-radius: 0 !important;
+        padding: 8px !important;
+        font-size: 1rem !important;
+        box-shadow: none !important;
+    }
+    .stTextInput > div > div > input:focus {
+        outline: 3px solid #ffdd00 !important;
+        outline-offset: 0 !important;
+        box-shadow: inset 0 0 0 2px !important;
+    }
+
+    /* ── Selectbox ── */
+    .stSelectbox > div > div {
+        border: 2px solid #0b0c0c !important;
+        border-radius: 0 !important;
+    }
+
+    /* ── Expander (document cards) ── */
+    details {
+        border: 1px solid #b1b4b6 !important;
+        border-left: 4px solid #1d70b8 !important;
+        border-radius: 0 !important;
+        margin-bottom: 12px !important;
+        background: #ffffff !important;
+    }
+    details summary {
+        background-color: #f3f2f1 !important;
+        padding: 12px 16px !important;
+        font-weight: 700 !important;
+        color: #0b0c0c !important;
+        cursor: pointer;
+    }
+    details summary:hover { background-color: #e8e8e8 !important; }
+
+    /* ── Info / warning boxes ── */
+    .stAlert {
+        border-radius: 0 !important;
+        border-left-width: 4px !important;
+    }
+
+    /* ── Metric cards ── */
+    [data-testid="metric-container"] {
+        background: #f3f2f1;
+        border-left: 4px solid #1d70b8;
+        padding: 12px;
+    }
+
+    /* ── Dividers ── */
+    hr { border-top: 1px solid #b1b4b6 !important; }
+
+    /* ── Links ── */
+    a { color: #1d70b8 !important; }
+    a:hover { color: #0f385c !important; }
+    a:visited { color: #54319f !important; }
+
+    /* ── GOV.UK crown/service name header strip ── */
+    .govuk-header-strip {
+        background: #0b0c0c;
+        color: #ffffff;
+        padding: 10px 24px;
+        font-size: 0.9rem;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        margin-bottom: 0;
+    }
+    .govuk-header-strip span {
+        color: #ffffff;
+        font-size: 1.1rem;
+    }
+    .govuk-phase-banner {
+        background: #ffffff;
+        border-bottom: 1px solid #b1b4b6;
+        padding: 8px 0 8px 0;
+        font-size: 0.875rem;
+        color: #0b0c0c;
+        margin-bottom: 1rem;
+    }
+    .govuk-tag {
+        display: inline-block;
+        background: #1d70b8;
+        color: #ffffff !important;
+        font-size: 0.75rem;
+        font-weight: 700;
+        letter-spacing: 1px;
+        padding: 2px 8px;
+        text-transform: uppercase;
+        margin-right: 8px;
+    }
+    </style>
+
+    <!-- GOV.UK style service header -->
+    <div class="govuk-header-strip">
+        <span>GOV.UK</span> &nbsp;|&nbsp; Government Document Search
+    </div>
+    <div class="govuk-phase-banner">
+        <strong class="govuk-tag">BETA</strong>
+        This is a prototype service — part of the AI Engineering Lab Hackathon 2026.
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
 DATA_DIR = Path(__file__).parent.parent.parent / (
@@ -75,11 +253,11 @@ tab_choice = st.sidebar.radio(
 # ---------------------------------------------------------------------------
 
 FLAG_LABELS = {
-    STALE: ("🕐 Stale", "orange"),
-    SUPERSEDED: ("🔄 Superseded", "red"),
-    MISSING_METADATA: ("❓ Missing metadata", "grey"),
-    CONTRADICTION: ("⚡ Contradiction", "red"),
-    DUPLICATE: ("🔁 Duplicate", "purple"),
+    STALE: ("🕐 Stale", "#f47738"),           # GOV.UK orange
+    SUPERSEDED: ("🔄 Superseded", "#ca3535"),   # GOV.UK red
+    MISSING_METADATA: ("❓ Missing metadata", "#505a5f"),  # GOV.UK secondary text
+    CONTRADICTION: ("⚡ Contradiction", "#ca3535"),  # GOV.UK red
+    DUPLICATE: ("🔁 Duplicate", "#54319f"),    # GOV.UK purple
 }
 
 
@@ -94,8 +272,8 @@ def render_flags(flags):
 
 
 def render_status_badge(status):
-    colour = {"current": "green", "draft": "orange", "superseded": "red"}.get(
-        (status or "").lower(), "grey"
+    colour = {"current": "#00703c", "draft": "#f47738", "superseded": "#ca3535"}.get(
+        (status or "").lower(), "#505a5f"
     )
     st.markdown(
         f'<span style="background:{colour};color:white;'
