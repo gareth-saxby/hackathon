@@ -1,53 +1,36 @@
 """
-indexer.py — TF-IDF search index over extracted GovernmentDocument sections.
+TF-IDF search index over extracted government documents.
+Challenge 2: Unlocking the Dark Data — DSIT AI Engineering Lab Hackathon 2026
 """
-from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Optional
+import numpy as np
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-from .schema import GovernmentDocument, QualityFlag
+from .schema import GovernmentDocument
 
 
 # ---------------------------------------------------------------------------
-# Search result
+# Search result structure
 # ---------------------------------------------------------------------------
 
 @dataclass
 class SearchResult:
     document_id: str
     title: str
+    department: Optional[str]
+    status: Optional[str]
+    publication_date: Optional[str]
+    last_updated: Optional[str]
+    source_file: str
     section_heading: str
     passage: str
-    publication_date: Optional[str]
-    status: Optional[str]
-    quality_flags: List[str]
     score: float
-    topics: List[str]
-
-    @property
-    def is_stale(self) -> bool:
-        return QualityFlag.STALE.value in self.quality_flags
-
-    @property
-    def is_superseded(self) -> bool:
-        return QualityFlag.SUPERSEDED.value in self.quality_flags
-
-    @property
-    def flag_summary(self) -> Optional[str]:
-        if not self.quality_flags:
-            return None
-        labels = {
-            "STALE": "⚠️ This document may be out of date",
-            "SUPERSEDED": "⚠️ This document may be superseded",
-            "MISSING_METADATA": "⚠️ Incomplete metadata",
-            "CONTRADICTION": "⚠️ Possible contradiction with another document",
-        }
-        msgs = [labels[f] for f in self.quality_flags if f in labels]
-        return " | ".join(msgs) if msgs else None
+    quality_flags: List[str]
+    matching_terms: List[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -55,156 +38,146 @@ class SearchResult:
 # ---------------------------------------------------------------------------
 
 class DocumentIndex:
-    """Build and query a TF-IDF index over document sections."""
-
-    def __init__(self) -> None:
-        self._docs: List[GovernmentDocument] = []
-        self._chunks: List[dict] = []   # {doc_idx, section_idx, text}
-        self._vectorizer: Optional[TfidfVectorizer] = None
-        self._matrix = None
-
-    # ------------------------------------------------------------------
-    # Build
-    # ------------------------------------------------------------------
-
-    def build(self, documents: List[GovernmentDocument]) -> None:
-        """Index all sections from *documents*."""
+    def __init__(self, documents: List[GovernmentDocument]):
         self._docs = documents
-        self._chunks = []
+        # Build one entry per section (finer-grained retrieval)
+        self._entries: List[dict] = []
+        for doc in documents:
+            for section in doc.sections:
+                combined = f"{doc.title} {section.heading} {section.body}"
+                self._entries.append({
+                    "doc": doc,
+                    "section_heading": section.heading,
+                    "passage": section.body,
+                    "text": combined,
+                })
+            # If a doc has no sections, fall back to raw text
+            if not doc.sections:
+                self._entries.append({
+                    "doc": doc,
+                    "section_heading": "(full document)",
+                    "passage": doc.raw_text[:1000],
+                    "text": doc.raw_text,
+                })
 
-        for doc_idx, doc in enumerate(documents):
-            for sec_idx, section in enumerate(doc.sections):
-                text = f"{section.heading} {section.body}".strip()
-                if text:
-                    self._chunks.append(
-                        {
-                            "doc_idx": doc_idx,
-                            "sec_idx": sec_idx,
-                            "text": text,
-                        }
-                    )
-
-        if not self._chunks:
-            return
-
-        corpus = [c["text"] for c in self._chunks]
+        corpus = [e["text"] for e in self._entries]
         self._vectorizer = TfidfVectorizer(
-            strip_accents="unicode",
-            lowercase=True,
+            stop_words="english",
             ngram_range=(1, 2),
-            max_df=0.95,
-            min_df=1,
-            sublinear_tf=True,
+            max_features=10000,
         )
-        self._matrix = self._vectorizer.fit_transform(corpus)
-
-    # ------------------------------------------------------------------
-    # Search (FR-07, FR-08, FR-09)
-    # ------------------------------------------------------------------
+        self._ready = bool(corpus) and any(t.strip() for t in corpus)
+        if self._ready:
+            self._matrix = self._vectorizer.fit_transform(corpus)
+            # Build one aggregated doc-level vector per unique document for duplicate detection
+            self._doc_vectors: Dict[str, np.ndarray] = {}
+            for i, entry in enumerate(self._entries):
+                doc_id = entry["doc"].document_id
+                vec = self._matrix[i].toarray()
+                if doc_id in self._doc_vectors:
+                    self._doc_vectors[doc_id] = self._doc_vectors[doc_id] + vec
+                else:
+                    self._doc_vectors[doc_id] = vec
+        else:
+            self._matrix = None
+            self._doc_vectors = {}
 
     def search(
         self,
         query: str,
-        top_n: int = 10,
-        topic_filter: Optional[str] = None,
+        top_n: int = 8,
         status_filter: Optional[str] = None,
+        topic_filter: Optional[str] = None,
     ) -> List[SearchResult]:
-        """
-        Return the top-N most relevant passages matching *query*.
-
-        Parameters
-        ----------
-        query        : free-text search string
-        top_n        : max results to return
-        topic_filter : if set, only include documents whose topics contain this value
-        status_filter: if set, only include documents with this status
-                       (one of: "current", "stale", "superseded")
-        """
-        if self._vectorizer is None or self._matrix is None or not query.strip():
+        if not self._ready:
             return []
+        query_vec = self._vectorizer.transform([query])
+        scores = cosine_similarity(query_vec, self._matrix).flatten()
 
-        q_vec = self._vectorizer.transform([query])
-        scores = cosine_similarity(q_vec, self._matrix).flatten()
+        ranked = sorted(enumerate(scores), key=lambda x: -x[1])
 
-        # Rank all chunks
-        ranked_indices = scores.argsort()[::-1]
+        # Pre-compute which terms the query activates (for matching_terms)
+        query_arr = query_vec.toarray()[0]
+        feature_names = self._vectorizer.get_feature_names_out()
+        query_term_indices = set(np.where(query_arr > 0)[0])
 
         results: List[SearchResult] = []
-        seen_sections: set = set()
-
-        for idx in ranked_indices:
-            if scores[idx] == 0:
+        seen_doc_ids: set = set()
+        for idx, score in ranked:
+            if score < 0.01:
                 break
-            chunk = self._chunks[idx]
-            doc = self._docs[chunk["doc_idx"]]
-            section = doc.sections[chunk["sec_idx"]]
+            entry = self._entries[idx]
+            doc: GovernmentDocument = entry["doc"]
 
-            # Deduplicate identical section from same doc
-            key = (doc.document_id, chunk["sec_idx"])
-            if key in seen_sections:
+            if status_filter and (doc.status or "").lower() != status_filter.lower():
                 continue
-            seen_sections.add(key)
-
-            # FR-09: apply filters
-            if topic_filter and topic_filter.lower() not in [
-                t.lower() for t in doc.topics
-            ]:
+            if topic_filter and not any(
+                topic_filter.lower() in t.lower() for t in doc.topics
+            ):
                 continue
-            if status_filter:
-                effective_status = _effective_status(doc)
-                if effective_status.lower() != status_filter.lower():
-                    continue
 
-            results.append(
-                SearchResult(
-                    document_id=doc.document_id,
-                    title=doc.title,
-                    section_heading=section.heading,
-                    passage=_truncate(section.body, 400),
-                    publication_date=doc.publication_date,
-                    status=doc.status,
-                    quality_flags=[f.value for f in doc.quality_flags],
-                    score=float(scores[idx]),
-                    topics=doc.topics,
-                )
-            )
+            # Matching terms: query terms that also appear in this section
+            entry_arr = self._matrix[idx].toarray()[0]
+            entry_term_indices = set(np.where(entry_arr > 0)[0])
+            overlap_indices = query_term_indices & entry_term_indices
+            # Sort by document TF-IDF weight descending, keep top 8
+            sorted_overlap = sorted(
+                overlap_indices,
+                key=lambda i: entry_arr[i],
+                reverse=True,
+            )[:8]
+            matching = [feature_names[i] for i in sorted_overlap]
+
+            results.append(SearchResult(
+                document_id=doc.document_id,
+                title=doc.title,
+                department=doc.department,
+                status=doc.status,
+                publication_date=doc.publication_date,
+                last_updated=doc.last_updated,
+                source_file=doc.source_file,
+                section_heading=entry["section_heading"],
+                passage=entry["passage"][:400],
+                score=round(float(score), 4),
+                quality_flags=doc.quality_flags,
+                matching_terms=matching,
+            ))
 
             if len(results) >= top_n:
                 break
 
         return results
 
-    # ------------------------------------------------------------------
-    # Accessors
-    # ------------------------------------------------------------------
-
-    @property
-    def documents(self) -> List[GovernmentDocument]:
+    def all_documents(self) -> List[GovernmentDocument]:
         return self._docs
 
-    def get_all_topics(self) -> List[str]:
-        topics: set = set()
-        for doc in self._docs:
-            topics.update(t.lower() for t in doc.topics if t)
-        return sorted(topics)
+    def find_duplicates(
+        self, threshold: float = 0.85
+    ) -> List[Tuple[str, str, float]]:
+        """
+        Return pairs of (doc_id_a, doc_id_b, similarity_score) where
+        cosine similarity between aggregated document vectors >= threshold.
+        Each pair is returned once (a < b lexicographically).
+        """
+        if not self._doc_vectors:
+            return []
 
+        doc_ids = list(self._doc_vectors.keys())
+        vectors = np.vstack([self._doc_vectors[d] for d in doc_ids])
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+        # Normalise rows to unit length for cosine similarity
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+        norms[norms == 0] = 1  # avoid div-by-zero for empty docs
+        normed = vectors / norms
 
-def _truncate(text: str, max_chars: int) -> str:
-    text = text.replace("\n", " ").strip()
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars].rsplit(" ", 1)[0] + " …"
+        sim_matrix = normed @ normed.T
 
+        pairs: List[Tuple[str, str, float]] = []
+        n = len(doc_ids)
+        for i in range(n):
+            for j in range(i + 1, n):
+                sim = float(sim_matrix[i, j])
+                if sim >= threshold:
+                    pairs.append((doc_ids[i], doc_ids[j], round(sim, 4)))
 
-def _effective_status(doc: GovernmentDocument) -> str:
-    """Return a display status considering quality flags."""
-    flags = {f.value for f in doc.quality_flags}
-    if "SUPERSEDED" in flags:
-        return "superseded"
-    if "STALE" in flags:
-        return "stale"
-    return (doc.status or "unknown").lower()
+        return sorted(pairs, key=lambda x: -x[2])

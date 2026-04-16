@@ -1,125 +1,98 @@
 """
-test_schema.py — Tests for GovernmentDocument dataclass and QualityFlag enum.
+Tests for src/schema.py
 """
-from __future__ import annotations
-
 import pytest
-from src.schema import GovernmentDocument, QualityFlag, Section, Table
+from src.schema import (
+    GovernmentDocument, Section, TableData,
+    STALE, SUPERSEDED, MISSING_METADATA, CONTRADICTION,
+)
 
 
-# ---------------------------------------------------------------------------
-# QualityFlag
-# ---------------------------------------------------------------------------
+class TestSectionDataclass:
+    def test_section_fields(self):
+        s = Section(heading="Overview", level=2, body="Some text.")
+        assert s.heading == "Overview"
+        assert s.level == 2
+        assert s.body == "Some text."
 
-class TestQualityFlag:
-    def test_all_expected_values_exist(self):
-        values = {f.value for f in QualityFlag}
-        assert values == {"STALE", "SUPERSEDED", "MISSING_METADATA", "CONTRADICTION"}
-
-    def test_is_string_subclass(self):
-        assert isinstance(QualityFlag.STALE, str)
-        assert QualityFlag.STALE == "STALE"
+    def test_section_level_range(self):
+        for level in [1, 2, 3, 4]:
+            s = Section(heading="H", level=level, body="")
+            assert s.level == level
 
 
-# ---------------------------------------------------------------------------
-# GovernmentDocument.to_dict / from_dict round-trip
-# ---------------------------------------------------------------------------
-
-class TestGovernmentDocumentRoundTrip:
-    def _make_doc(self) -> GovernmentDocument:
-        return GovernmentDocument(
-            document_id="DOC-T-001",
-            title="Test Doc",
-            department="Test Dept",
-            document_type="guidance",
-            status="current",
-            publication_date="2025-01-01",
-            last_updated="2025-06-01",
-            audience="Citizens",
-            topics=["housing", "benefits"],
-            version="1.0",
-            supersedes="DOC-T-000",
-            related_documents=["DOC-T-002"],
-            sections=[Section(heading="Overview", level=1, body="Overview text.")],
-            tables=[
-                Table(
-                    caption="Limits",
-                    headers=["Item", "Value"],
-                    rows=[["Capital", "£16,000"]],
-                )
-            ],
-            keywords=["housing"],
-            quality_flags=[QualityFlag.STALE],
-            source_file="/docs/DOC-T-001.html",
-            source_format="html",
+class TestTableDataDataclass:
+    def test_table_with_data(self):
+        t = TableData(
+            caption="My Table",
+            headers=["Name", "Value"],
+            rows=[["Threshold", "£16,000"], ["Taper", "65%"]],
         )
+        assert t.caption == "My Table"
+        assert len(t.headers) == 2
+        assert len(t.rows) == 2
 
-    def test_to_dict_keys(self):
-        d = self._make_doc().to_dict()
+    def test_table_empty_rows(self):
+        t = TableData(caption=None, headers=["Col"], rows=[])
+        assert t.rows == []
+        assert t.caption is None
+
+
+class TestGovernmentDocumentToDict:
+    def test_to_dict_has_all_keys(self, minimal_doc):
+        d = minimal_doc.to_dict()
         expected_keys = {
             "document_id", "title", "department", "document_type", "status",
-            "publication_date", "last_updated", "audience", "topics", "version",
-            "supersedes", "related_documents", "sections", "tables", "keywords",
-            "quality_flags", "source_file", "source_format",
+            "publication_date", "last_updated", "audience", "topics",
+            "version", "supersedes", "related_documents", "sections",
+            "tables", "keywords", "quality_flags", "raw_text",
+            "source_file", "source_format",
         }
         assert expected_keys == set(d.keys())
 
-    def test_quality_flags_serialised_as_strings(self):
-        d = self._make_doc().to_dict()
-        assert d["quality_flags"] == ["STALE"]
+    def test_to_dict_sections_serialised(self, minimal_doc):
+        d = minimal_doc.to_dict()
+        assert isinstance(d["sections"], list)
+        assert d["sections"][0] == {
+            "heading": "Overview", "level": 2, "body": "This is the overview text."
+        }
 
-    def test_sections_serialised(self):
-        d = self._make_doc().to_dict()
-        assert d["sections"] == [{"heading": "Overview", "level": 1, "body": "Overview text."}]
-
-    def test_tables_serialised(self):
-        d = self._make_doc().to_dict()
-        assert d["tables"] == [
-            {"caption": "Limits", "headers": ["Item", "Value"], "rows": [["Capital", "£16,000"]]}
+    def test_to_dict_tables_serialised(self, minimal_doc):
+        minimal_doc.tables = [
+            TableData(caption="Cap", headers=["A", "B"], rows=[["1", "2"]])
         ]
+        d = minimal_doc.to_dict()
+        assert d["tables"][0]["caption"] == "Cap"
+        assert d["tables"][0]["headers"] == ["A", "B"]
+        assert d["tables"][0]["rows"] == [["1", "2"]]
 
-    def test_from_dict_restores_document(self):
-        original = self._make_doc()
-        restored = GovernmentDocument.from_dict(original.to_dict())
+    def test_to_dict_values_match_doc(self, minimal_doc):
+        d = minimal_doc.to_dict()
+        assert d["document_id"] == "DOC-TEST-001"
+        assert d["title"] == "Test Policy"
+        assert d["status"] == "current"
+        assert d["source_format"] == "html"
+        assert d["topics"] == ["policy", "test"]
 
-        assert restored.document_id == original.document_id
-        assert restored.title == original.title
-        assert restored.topics == original.topics
-        assert restored.quality_flags == original.quality_flags
-        assert len(restored.sections) == len(original.sections)
-        assert restored.sections[0].heading == "Overview"
-        assert restored.tables[0].headers == ["Item", "Value"]
-
-    def test_from_dict_tolerates_unknown_flag(self):
-        data = self._make_doc().to_dict()
-        data["quality_flags"] = ["STALE", "UNKNOWN_FLAG"]
-        doc = GovernmentDocument.from_dict(data)
-        assert doc.quality_flags == [QualityFlag.STALE]
-
-    def test_from_dict_missing_optional_fields(self):
-        doc = GovernmentDocument.from_dict(
-            {"document_id": "X", "title": "Minimal"}
-        )
-        assert doc.document_id == "X"
-        assert doc.department is None
-        assert doc.topics == []
-        assert doc.quality_flags == []
+    def test_to_dict_optional_fields_none(self, minimal_doc):
+        minimal_doc.supersedes = None
+        minimal_doc.version = None
+        d = minimal_doc.to_dict()
+        assert d["supersedes"] is None
+        assert d["version"] is None
 
 
-# ---------------------------------------------------------------------------
-# Empty document defaults
-# ---------------------------------------------------------------------------
+class TestQualityFlagConstants:
+    def test_flag_values_are_strings(self):
+        assert isinstance(STALE, str)
+        assert isinstance(SUPERSEDED, str)
+        assert isinstance(MISSING_METADATA, str)
+        assert isinstance(CONTRADICTION, str)
 
-class TestGovernmentDocumentDefaults:
-    def test_lists_default_to_empty(self):
-        doc = GovernmentDocument(document_id="X", title="T")
-        assert doc.topics == []
-        assert doc.sections == []
-        assert doc.quality_flags == []
-        assert doc.related_documents == []
+    def test_flag_values_are_unique(self):
+        flags = {STALE, SUPERSEDED, MISSING_METADATA, CONTRADICTION}
+        assert len(flags) == 4
 
-    def test_optional_fields_default_to_none(self):
-        doc = GovernmentDocument(document_id="X", title="T")
-        assert doc.department is None
-        assert doc.status is None
-        assert doc.publication_date is None
+    def test_quality_flags_field_mutable(self, minimal_doc):
+        minimal_doc.quality_flags.append(STALE)
+        assert STALE in minimal_doc.quality_flags

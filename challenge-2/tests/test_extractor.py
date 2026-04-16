@@ -1,296 +1,269 @@
 """
-test_extractor.py — Tests for HTML, Markdown, and TXT parsers + quality flag logic.
+Tests for src/extractor.py — HTML, Markdown, plain text parsers.
 """
-from __future__ import annotations
-
 import textwrap
-from pathlib import Path
-
 import pytest
 
-from src.extractor import (
-    _flag_missing_metadata,
-    _flag_stale,
-    apply_corpus_flags,
-    parse_html,
-    parse_markdown,
-    parse_txt,
-)
-from src.schema import GovernmentDocument, QualityFlag, Section
+from src.extractor import load_all_documents
+from src.schema import GovernmentDocument
 
 
-# ===========================================================================
-# HTML parser (FR-01)
-# ===========================================================================
+# ---------------------------------------------------------------------------
+# Helpers — inline document fixtures
+# ---------------------------------------------------------------------------
 
-class TestParseHtml:
-    def test_returns_government_document(self, html_file):
-        doc = parse_html(html_file)
-        assert isinstance(doc, GovernmentDocument)
+HTML_DOC = textwrap.dedent("""\
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta name="document-id" content="DOC-HB-001">
+        <meta name="author" content="Department A">
+        <meta name="document-type" content="guidance">
+        <meta name="status" content="current">
+        <meta name="publication-date" content="2025-06-15">
+        <meta name="last-updated" content="2025-11-20">
+        <meta name="audience" content="Citizens">
+        <meta name="topics" content="housing-benefit, benefits">
+        <title>Housing Benefit Eligibility</title>
+    </head>
+    <body>
+        <h1>Housing Benefit Eligibility</h1>
+        <h2>Overview</h2>
+        <p>Housing Benefit helps pay your rent.</p>
+        <h2>Who can claim</h2>
+        <p>You must be on a low income.</p>
+        <table>
+            <tr><th>Criteria</th><th>Threshold</th></tr>
+            <tr><td>Savings</td><td>£16,000</td></tr>
+        </table>
+    </body>
+    </html>
+""")
 
-    def test_document_id_from_meta(self, html_file):
-        doc = parse_html(html_file)
-        assert doc.document_id == "DOC-TEST-001"
+MARKDOWN_DOC = textwrap.dedent("""\
+    ---
+    document_id: DOC-HB-002
+    title: "Discretionary Housing Payments"
+    department: "[DEPT-A]"
+    type: procedural-manual
+    status: current
+    publication_date: 2025-03-01
+    last_updated: 2025-09-15
+    audience: Local authority officers
+    version: "2.1"
+    supersedes: "DOC-HB-002 v1.4"
+    topics:
+      - housing-benefit
+      - discretionary-housing-payments
+    related_documents:
+      - DOC-HB-001
+    ---
 
-    def test_title_strips_site_suffix(self, html_file):
-        doc = parse_html(html_file)
-        assert doc.title == "Test Benefit Guide"
-        assert "GOV.UK" not in doc.title
+    # Discretionary Housing Payments
 
-    def test_department_parsed(self, html_file):
-        doc = parse_html(html_file)
-        assert doc.department == "Dept of Testing"
+    ## Purpose and scope
 
-    def test_status_parsed(self, html_file):
-        doc = parse_html(html_file)
-        assert doc.status == "current"
+    This manual covers the procedural framework for DHPs.
 
-    def test_publication_date_parsed(self, html_file):
-        doc = parse_html(html_file)
-        assert doc.publication_date == "2025-01-10"
+    ## Eligibility assessment
 
-    def test_topics_split_on_comma(self, html_file):
-        doc = parse_html(html_file)
-        assert "testing" in doc.topics
+    Officers must confirm Housing Benefit entitlement first.
+
+    | Criterion | Detail |
+    |---|---|
+    | Gateway | HB or UC housing element |
+""")
+
+TXT_DOC = textwrap.dedent("""\
+    Document ID: DOC-HB-003
+    Title: Council Tax Reduction Schemes
+    Department: Government Department A
+    Status: Current
+    Published: March 2024
+    Audience: Local authority officers
+
+    1. Introduction
+
+    This document covers the CTR regulatory framework.
+
+    2. Scope of local authority discretion
+
+    Billing authorities may design their own schemes.
+""")
+
+
+# ---------------------------------------------------------------------------
+# HTML extractor
+# ---------------------------------------------------------------------------
+
+class TestHTMLExtractor:
+    def _parse(self):
+        from src.extractor import _extract_html
+        return _extract_html(HTML_DOC, "DOC-HB-001.html")
+
+    def test_document_id(self):
+        assert self._parse().document_id == "DOC-HB-001"
+
+    def test_title(self):
+        assert "Housing Benefit" in self._parse().title
+
+    def test_department(self):
+        assert self._parse().department == "Department A"
+
+    def test_status(self):
+        assert self._parse().status == "current"
+
+    def test_publication_date(self):
+        assert self._parse().publication_date == "2025-06-15"
+
+    def test_last_updated(self):
+        assert self._parse().last_updated == "2025-11-20"
+
+    def test_topics_parsed(self):
+        doc = self._parse()
+        assert "housing-benefit" in doc.topics
         assert "benefits" in doc.topics
 
-    def test_sections_extracted(self, html_file):
-        doc = parse_html(html_file)
-        headings = [s.heading for s in doc.sections]
-        assert "Eligibility" in headings
-        assert "How to apply" in headings
-
-    def test_section_body_contains_text(self, html_file):
-        doc = parse_html(html_file)
-        elig = next(s for s in doc.sections if s.heading == "Eligibility")
-        assert "capital limit" in elig.body.lower()
-
-    def test_table_extracted(self, html_file):
-        doc = parse_html(html_file)
-        assert len(doc.tables) == 1
-        table = doc.tables[0]
-        assert table.headers == ["Criterion", "Threshold"]
-        assert ["Capital", "£16,000"] in table.rows
-
-    def test_source_format_is_html(self, html_file):
-        doc = parse_html(html_file)
-        assert doc.source_format == "html"
-
-    def test_source_file_is_absolute_path(self, html_file):
-        doc = parse_html(html_file)
-        assert str(html_file) == doc.source_file
-
-    def test_fallback_doc_id_uses_stem_when_no_meta(self, no_meta_html_file):
-        doc = parse_html(no_meta_html_file)
-        assert doc.document_id == no_meta_html_file.stem
-
-
-# ===========================================================================
-# Markdown parser (FR-02)
-# ===========================================================================
-
-class TestParseMarkdown:
-    def test_returns_government_document(self, md_file):
-        doc = parse_markdown(md_file)
-        assert isinstance(doc, GovernmentDocument)
-
-    def test_document_id_from_frontmatter(self, md_file):
-        doc = parse_markdown(md_file)
-        assert doc.document_id == "DOC-TEST-002"
-
-    def test_title_from_frontmatter(self, md_file):
-        doc = parse_markdown(md_file)
-        assert doc.title == "Test Employment Guide"
-
-    def test_status_from_frontmatter(self, md_file):
-        doc = parse_markdown(md_file)
-        assert doc.status == "current"
-
-    def test_topics_as_list(self, md_file):
-        doc = parse_markdown(md_file)
-        assert "employment" in doc.topics
-        assert "testing" in doc.topics
-
-    def test_related_documents(self, md_file):
-        doc = parse_markdown(md_file)
-        assert "DOC-TEST-001" in doc.related_documents
-
-    def test_sections_from_headings(self, md_file):
-        doc = parse_markdown(md_file)
+    def test_sections_extracted(self):
+        doc = self._parse()
         headings = [s.heading for s in doc.sections]
         assert "Overview" in headings
-        assert "Eligibility" in headings
+        assert "Who can claim" in headings
 
-    def test_section_body_populated(self, md_file):
-        doc = parse_markdown(md_file)
+    def test_section_body_populated(self):
+        doc = self._parse()
         overview = next(s for s in doc.sections if s.heading == "Overview")
-        assert "test employment rules" in overview.body.lower()
+        assert "rent" in overview.body.lower()
 
-    def test_source_format_is_markdown(self, md_file):
-        doc = parse_markdown(md_file)
-        assert doc.source_format == "markdown"
+    def test_table_extracted(self):
+        doc = self._parse()
+        assert len(doc.tables) == 1
+        assert "Savings" in doc.tables[0].rows[0]
+
+    def test_source_format(self):
+        assert self._parse().source_format == "html"
+
+    def test_keywords_populated(self):
+        assert len(self._parse().keywords) > 0
 
 
-# ===========================================================================
-# TXT parser (FR-03)
-# ===========================================================================
+# ---------------------------------------------------------------------------
+# Markdown extractor
+# ---------------------------------------------------------------------------
 
-class TestParseTxt:
-    def test_returns_government_document(self, txt_file):
-        doc = parse_txt(txt_file)
-        assert isinstance(doc, GovernmentDocument)
+class TestMarkdownExtractor:
+    def _parse(self):
+        from src.extractor import _extract_markdown
+        return _extract_markdown(MARKDOWN_DOC, "DOC-HB-002.md")
 
-    def test_document_id_from_inline_meta(self, txt_file):
-        doc = parse_txt(txt_file)
-        assert doc.document_id == "DOC-TEST-003"
+    def test_document_id(self):
+        assert self._parse().document_id == "DOC-HB-002"
 
-    def test_department_from_inline_meta(self, txt_file):
-        doc = parse_txt(txt_file)
-        assert doc.department == "Dept of Testing"
+    def test_title(self):
+        assert "Discretionary" in self._parse().title
 
-    def test_status_from_inline_meta(self, txt_file):
-        doc = parse_txt(txt_file)
-        assert doc.status is not None
-        assert doc.status.lower() == "current"
+    def test_version(self):
+        assert self._parse().version == "2.1"
 
-    def test_sections_from_numbered_headings(self, txt_file):
-        doc = parse_txt(txt_file)
+    def test_supersedes(self):
+        assert "DOC-HB-002" in self._parse().supersedes
+
+    def test_related_documents(self):
+        assert "DOC-HB-001" in self._parse().related_documents
+
+    def test_topics_are_strings(self):
+        doc = self._parse()
+        for t in doc.topics:
+            assert isinstance(t, str), f"Expected str, got {type(t)}: {t}"
+
+    def test_publication_date_is_string(self):
+        doc = self._parse()
+        assert isinstance(doc.publication_date, str)
+        assert doc.publication_date == "2025-03-01"
+
+    def test_last_updated_is_string(self):
+        doc = self._parse()
+        assert isinstance(doc.last_updated, str)
+
+    def test_sections_extracted(self):
+        doc = self._parse()
         headings = [s.heading for s in doc.sections]
-        # Numbered sections "1." and "2." should be detected
-        assert any("Introduction" in h or "introduction" in h.lower() for h in headings)
+        assert "Purpose and scope" in headings
 
-    def test_source_format_is_txt(self, txt_file):
-        doc = parse_txt(txt_file)
-        assert doc.source_format == "txt"
+    def test_source_format(self):
+        assert self._parse().source_format == "markdown"
 
 
-# ===========================================================================
-# Per-document quality flags
-# ===========================================================================
+# ---------------------------------------------------------------------------
+# Plain text extractor
+# ---------------------------------------------------------------------------
 
-class TestFlagStale:
-    def test_stale_when_current_and_old(self, stale_html_file):
-        doc = parse_html(stale_html_file)
-        assert QualityFlag.STALE in doc.quality_flags
+class TestTxtExtractor:
+    def _parse(self):
+        from src.extractor import _extract_txt
+        return _extract_txt(TXT_DOC, "DOC-HB-003.txt")
 
-    def test_not_stale_when_recently_updated(self, html_file):
-        # html_file has last-updated 2025-01-10, which is < 12 months from test date (2026-04-16)
-        doc = parse_html(html_file)
-        # 2025-01-10 is ~15 months before 2026-04-16, so it WILL be stale
-        # This is expected behaviour per FR-10
-        assert isinstance(doc.quality_flags, list)
+    def test_document_id(self):
+        assert self._parse().document_id == "DOC-HB-003"
 
-    def test_not_stale_when_not_current_status(self, tmp_path):
-        html = textwrap.dedent(
-            """\
-            <html><head>
-              <title>Draft Doc</title>
-              <meta name="document-id" content="DOC-DRAFT-001">
-              <meta name="department" content="Dept">
-              <meta name="status" content="draft">
-              <meta name="publication-date" content="2020-01-01">
-              <meta name="last-updated" content="2020-01-01">
-            </head><body><h1>Draft</h1><p>Content.</p></body></html>
-            """
+    def test_title(self):
+        assert "Council Tax" in self._parse().title
+
+    def test_department(self):
+        assert self._parse().department is not None
+
+    def test_status(self):
+        doc = self._parse()
+        assert doc.status is not None
+
+    def test_sections_extracted(self):
+        doc = self._parse()
+        assert len(doc.sections) >= 1
+
+    def test_source_format(self):
+        assert self._parse().source_format == "txt"
+
+    def test_raw_text_populated(self):
+        doc = self._parse()
+        assert len(doc.raw_text) > 0
+
+
+# ---------------------------------------------------------------------------
+# load_all_documents — integration
+# ---------------------------------------------------------------------------
+
+class TestLoadAllDocuments:
+    def test_loads_structured_files(self):
+        from pathlib import Path
+        data_dir = (
+            Path(__file__).parent.parent.parent.parent
+            / "ai-engineering-lab-hackathon-london-2026/challenge-2/structured_files"
         )
-        p = tmp_path / "DOC-DRAFT-001.html"
-        p.write_text(html, encoding="utf-8")
-        doc = parse_html(p)
-        assert QualityFlag.STALE not in doc.quality_flags
+        if not data_dir.exists():
+            pytest.skip("Structured files directory not found")
+        docs = load_all_documents(str(data_dir))
+        assert len(docs) > 0
 
-
-class TestFlagMissingMetadata:
-    def test_flags_missing_department(self, no_meta_html_file):
-        doc = parse_html(no_meta_html_file)
-        assert QualityFlag.MISSING_METADATA in doc.quality_flags
-
-    def test_no_missing_flag_when_complete(self, html_file):
-        doc = parse_html(html_file)
-        assert QualityFlag.MISSING_METADATA not in doc.quality_flags
-
-    def test_flag_missing_metadata_helper_detects_absent_title(self):
-        doc = GovernmentDocument(
-            document_id="X",
-            title="",
-            department="Dept",
-            publication_date="2025-01-01",
+    def test_all_docs_have_title(self):
+        from pathlib import Path
+        data_dir = (
+            Path(__file__).parent.parent.parent.parent
+            / "ai-engineering-lab-hackathon-london-2026/challenge-2/structured_files"
         )
-        assert _flag_missing_metadata(doc) is True
+        if not data_dir.exists():
+            pytest.skip("Structured files directory not found")
+        docs = load_all_documents(str(data_dir))
+        for doc in docs:
+            assert doc.title, f"{doc.source_file} has no title"
 
-    def test_flag_missing_metadata_helper_clean_doc(self):
-        doc = GovernmentDocument(
-            document_id="X",
-            title="Valid Title",
-            department="Dept",
-            publication_date="2025-01-01",
+    def test_all_docs_are_government_documents(self):
+        from pathlib import Path
+        data_dir = (
+            Path(__file__).parent.parent.parent.parent
+            / "ai-engineering-lab-hackathon-london-2026/challenge-2/structured_files"
         )
-        assert _flag_missing_metadata(doc) is False
-
-
-# ===========================================================================
-# Corpus-level quality flags (FR-11, FR-13)
-# ===========================================================================
-
-class TestApplyCorpusFlags:
-    def _make_doc(self, doc_id, title="Doc", status="current", supersedes=None, section_body="") -> GovernmentDocument:
-        return GovernmentDocument(
-            document_id=doc_id,
-            title=title,
-            department="Dept",
-            status=status,
-            publication_date="2025-06-01",
-            supersedes=supersedes,
-            sections=[Section(heading="Main", level=1, body=section_body)],
-        )
-
-    def test_superseded_flag_applied_to_target_doc(self):
-        old = self._make_doc("DOC-OLD-001")
-        new = self._make_doc("DOC-NEW-001", supersedes="DOC-OLD-001")
-        apply_corpus_flags([old, new])
-        assert QualityFlag.SUPERSEDED in old.quality_flags
-
-    def test_superseding_doc_not_flagged_superseded(self):
-        old = self._make_doc("DOC-OLD-001")
-        new = self._make_doc("DOC-NEW-001", supersedes="DOC-OLD-001")
-        apply_corpus_flags([old, new])
-        assert QualityFlag.SUPERSEDED not in new.quality_flags
-
-    def test_no_superseded_when_no_supersedes_declared(self):
-        a = self._make_doc("DOC-A-001")
-        b = self._make_doc("DOC-B-001")
-        apply_corpus_flags([a, b])
-        assert QualityFlag.SUPERSEDED not in a.quality_flags
-        assert QualityFlag.SUPERSEDED not in b.quality_flags
-
-    def test_contradiction_flagged_for_differing_capital_limit(self):
-        doc_a = self._make_doc(
-            "DOC-A-001",
-            section_body="The capital limit of £16,000 applies to all claimants.",
-        )
-        doc_b = self._make_doc(
-            "DOC-B-001",
-            section_body="The capital limit of £6,000 applies to this scheme.",
-        )
-        apply_corpus_flags([doc_a, doc_b])
-        assert QualityFlag.CONTRADICTION in doc_a.quality_flags
-        assert QualityFlag.CONTRADICTION in doc_b.quality_flags
-
-    def test_no_contradiction_when_values_agree(self):
-        doc_a = self._make_doc(
-            "DOC-A-001",
-            section_body="The capital limit of £16,000 applies.",
-        )
-        doc_b = self._make_doc(
-            "DOC-B-001",
-            section_body="The capital limit of £16,000 is the threshold.",
-        )
-        apply_corpus_flags([doc_a, doc_b])
-        assert QualityFlag.CONTRADICTION not in doc_a.quality_flags
-        assert QualityFlag.CONTRADICTION not in doc_b.quality_flags
-
-    def test_flags_not_duplicated_on_repeated_call(self):
-        old = self._make_doc("DOC-OLD-001")
-        new = self._make_doc("DOC-NEW-001", supersedes="DOC-OLD-001")
-        apply_corpus_flags([old, new])
-        apply_corpus_flags([old, new])  # second call
-        assert old.quality_flags.count(QualityFlag.SUPERSEDED) == 1
+        if not data_dir.exists():
+            pytest.skip("Structured files directory not found")
+        docs = load_all_documents(str(data_dir))
+        for doc in docs:
+            assert isinstance(doc, GovernmentDocument)
