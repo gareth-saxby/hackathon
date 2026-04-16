@@ -1,0 +1,4 @@
+data/extracted/
+__pycache__/
+*.pyc
+.env
