@@ -12,21 +12,21 @@
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        INPUT DATA SOURCES                                   │
 │                                                                             │
-│   ┌──────────────────────────────┐   ┌──────────────────────────────────┐  │
-│   │  STRUCTURED FILES  ✅ DONE   │   │  UNSTRUCTURED FILES  ⬜ TODO     │  │
-│   │  challenge-info/data/        │   │  challenge-info/data/            │  │
-│   │  structured_files/           │   │  unstructured_files/             │  │
-│   │                              │   │                                  │  │
-│   │  20 documents                │   │  23 documents                    │  │
-│   │  .html  .md  .txt            │   │  .pdf  .docx  .xlsx              │  │
-│   │  Housing & Benefits (HB)     │   │  HR policies, briefing packs,    │  │
-│   │  Small Business & Empl (SB)  │   │  meeting minutes, spreadsheets   │  │
-│   └──────────────┬───────────────┘   └────────────────┬─────────────────┘  │
+│   ┌──────────────────────────────┐   ┌──────────────────────────────────┐   │
+│   │  STRUCTURED FILES  ✅ DONE   │   │  UNSTRUCTURED FILES  ⬜ TODO    │   │
+│   │  challenge-info/data/        │   │  challenge-info/data/            │   │
+│   │  structured_files/           │   │  unstructured_files/             │   │
+│   │                              │   │                                  │   │
+│   │  20 documents                │   │  23 documents                    │   │
+│   │  .html  .md  .txt            │   │  .pdf  .docx  .xlsx              │   │
+│   │  Housing & Benefits (HB)     │   │  HR policies, briefing packs,    │   │
+│   │  Small Business & Empl (SB)  │   │  meeting minutes, spreadsheets   │   │
+│   └──────────────┬───────────────┘   └────────────────┬─────────────────┘   │
 └──────────────────┼──────────────────────────────────── ┼ ───────────────────┘
                    │                                      │
                    ▼                                      ▼
 ┌──────────────────────────────┐   ┌──────────────────────────────────────────┐
-│  src/extractor.py  ✅ DONE   │   │  src/extractor.py (unstructured) ⬜ TODO │
+│  src/extractor.py  ✅ DONE  │   │  src/extractor.py (unstructured) ⬜ TODO │
 │                              │   │                                          │
 │  parse_html()                │   │  extract_pdf()   — pdfplumber            │
 │  parse_markdown()            │   │  extract_docx()  — python-docx           │
