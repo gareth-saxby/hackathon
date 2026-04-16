@@ -26,11 +26,17 @@ class SearchResult:
     publication_date: Optional[str]
     last_updated: Optional[str]
     source_file: str
+    source_format: str          # html | markdown | txt | govuk-api
     section_heading: str
     passage: str
     score: float
     quality_flags: List[str]
     matching_terms: List[str] = field(default_factory=list)
+
+    @property
+    def is_live(self) -> bool:
+        """True when this result came from the live GOV.UK API."""
+        return self.source_format == "govuk-api"
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +142,7 @@ class DocumentIndex:
                 publication_date=doc.publication_date,
                 last_updated=doc.last_updated,
                 source_file=doc.source_file,
+                source_format=doc.source_format,
                 section_heading=entry["section_heading"],
                 passage=entry["passage"][:400],
                 score=round(float(score), 4),
@@ -181,3 +188,25 @@ class DocumentIndex:
                     pairs.append((doc_ids[i], doc_ids[j], round(sim, 4)))
 
         return sorted(pairs, key=lambda x: -x[2])
+
+
+# ---------------------------------------------------------------------------
+# Merged index helper
+# ---------------------------------------------------------------------------
+
+def build_merged(
+    base_docs: List[GovernmentDocument],
+    extra_docs: List[GovernmentDocument],
+) -> DocumentIndex:
+    """
+    Return a new DocumentIndex built from *base_docs* + *extra_docs* combined.
+
+    Used to blend local corpus documents with live GOV.UK API documents so
+    that a single search ranks all passages on the same TF-IDF scale.
+
+    Duplicate document_ids in *extra_docs* (vs *base_docs*) are skipped to
+    avoid double-counting if the same GOV.UK page was already in the corpus.
+    """
+    existing_ids = {d.document_id for d in base_docs}
+    deduped_extra = [d for d in extra_docs if d.document_id not in existing_ids]
+    return DocumentIndex(base_docs + deduped_extra)

@@ -18,6 +18,8 @@ from src.extractor import load_all_documents
 from src.indexer import DocumentIndex
 from src.qa import detect_quality_flags, quality_summary
 from src.schema import STALE, SUPERSEDED, MISSING_METADATA, CONTRADICTION, DUPLICATE
+from src.govuk import augment_query, infer_organisations
+from src.indexer import DocumentIndex, build_merged
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -291,7 +293,7 @@ if tab_choice == "🔍 Search":
         "that matches your query, with source and data quality warnings."
     )
 
-    col1, col2, col3 = st.columns([3, 1, 1])
+    col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
     with col1:
         query = st.text_input(
             "Ask a question or enter keywords",
@@ -308,11 +310,46 @@ if tab_choice == "🔍 Search":
             if isinstance(t, str) and t.strip()
         })
         topic_filter = st.selectbox("Filter by topic", ["All"] + all_topics)
+    with col4:
+        st.markdown("&nbsp;", unsafe_allow_html=True)
+        govuk_enabled = st.toggle(
+            "🌐 Live GOV.UK",
+            value=False,
+            help="Fetch live GOV.UK pages and blend them into results ranked by the same relevance score",
+        )
 
     if query:
-        results = index.search(
+        # -----------------------------------------------------------------------
+        # Build the active index — merged when GOV.UK is on, local-only otherwise
+        # -----------------------------------------------------------------------
+        active_index = index
+        inferred_orgs: list[str] = []
+
+        if govuk_enabled:
+            @st.cache_data(ttl=3600, show_spinner="Fetching live GOV.UK pages…")
+            def _fetch_govuk(q: str) -> tuple:
+                return augment_query(q, max_results=3)
+
+            _govuk_pages, govuk_docs, inferred_orgs = _fetch_govuk(query)
+
+            if govuk_docs:
+                active_index = build_merged(docs, govuk_docs)
+
+            # Show which departments were searched
+            if inferred_orgs:
+                org_pills = " · ".join(
+                    f"`{o.replace('-', ' ').title()}`" for o in inferred_orgs
+                )
+                st.caption(f"🌐 GOV.UK search filtered to: {org_pills}")
+            else:
+                st.caption("🌐 GOV.UK search: no specific department inferred — searching all")
+
+        # -----------------------------------------------------------------------
+        # Run single unified search
+        # -----------------------------------------------------------------------
+        results = active_index.search(
             query,
-            top_n=8,
+            top_n=10,
             status_filter=None if status_filter == "All" else status_filter,
             topic_filter=None if topic_filter == "All" else topic_filter,
         )
@@ -320,18 +357,34 @@ if tab_choice == "🔍 Search":
         if not results:
             st.info("No matching passages found. Try different keywords.")
         else:
-            st.markdown(f"**{len(results)} result(s)** for: *{query}*")
+            local_count = sum(1 for r in results if not r.is_live)
+            live_count = sum(1 for r in results if r.is_live)
+            summary = f"**{len(results)} result(s)** for: *{query}*"
+            if govuk_enabled:
+                summary += f"  —  {local_count} local · {live_count} live GOV.UK"
+            st.markdown(summary)
             st.markdown("---")
+
             for i, r in enumerate(results):
                 relevance = "High" if r.score >= 0.3 else "Medium" if r.score >= 0.1 else "Low"
+                # Source badge in expander title
+                source_badge = "🌐 GOV.UK" if r.is_live else "📄 Local"
                 with st.expander(
-                    f"📄 {r.title}  —  {r.section_heading}  [{relevance} relevance]",
+                    f"{source_badge}  {r.title}  —  {r.section_heading}  [{relevance} relevance]",
                     expanded=(i == 0),
                 ):
+                    _fmt_icons = {
+                        "html": "🌐 HTML", "markdown": "📝 Markdown",
+                        "txt": "📄 Text", "govuk-api": "🌐 GOV.UK (live)",
+                        "pdf": "📕 PDF", "docx": "📘 DOCX", "xlsx": "📗 XLSX",
+                    }
                     col_a, col_b, col_c = st.columns([2, 1, 1])
                     with col_a:
                         st.markdown(f"**Document ID:** `{r.document_id}`")
                         st.markdown(f"**Department:** {r.department or '—'}")
+                        st.markdown(
+                            f"**Source:** {_fmt_icons.get(r.source_format, r.source_format)}"
+                        )
                     with col_b:
                         st.markdown("**Status:**")
                         render_status_badge(r.status)
@@ -342,7 +395,7 @@ if tab_choice == "🔍 Search":
                         )
                     st.markdown("**Matching passage:**")
                     st.info(r.passage)
-                    # Score bar + matching terms
+
                     score_pct = int(r.score * 100)
                     st.markdown(
                         f"**Relevance score:** {score_pct}% "
@@ -356,22 +409,23 @@ if tab_choice == "🔍 Search":
                             f'padding:2px 7px;border-radius:4px;font-size:0.85em">{t}</code>'
                             for t in r.matching_terms
                         )
-                        st.markdown(
-                            f"**Matched on:** {terms_html}",
-                            unsafe_allow_html=True,
-                        )
+                        st.markdown(f"**Matched on:** {terms_html}", unsafe_allow_html=True)
                     if r.quality_flags:
                         st.markdown("**Warnings:**")
                         render_flags(r.quality_flags)
-                    # Citation block — copy-ready reference for caseworker records
-                    st.markdown("**Citation:**")
-                    citation = (
-                        f"{r.document_id} | {r.title} | "
-                        f"§ {r.section_heading} | "
-                        f"Last updated: {r.last_updated or 'unknown'} | "
-                        f"Source: {r.source_file}"
-                    )
-                    st.code(citation, language=None)
+
+                    # Citation / link row
+                    if r.is_live:
+                        st.link_button("Open on GOV.UK ↗", r.source_file)
+                    else:
+                        st.markdown("**Citation:**")
+                        citation = (
+                            f"{r.document_id} | {r.title} | "
+                            f"§ {r.section_heading} | "
+                            f"Last updated: {r.last_updated or 'unknown'} | "
+                            f"Source: {r.source_file}"
+                        )
+                        st.code(citation, language=None)
 
 # ---------------------------------------------------------------------------
 # Tab: Browse
@@ -499,8 +553,14 @@ elif tab_choice == "⚠️ Data Quality":
                             render_status_badge(doc.status)
                     with col_c:
                         if doc:
+                            _dq_fmt_icons = {
+                                "html": "🌐 HTML", "markdown": "📝 Markdown",
+                                "txt": "📄 Text", "govuk-api": "🌐 GOV.UK (live)",
+                                "pdf": "📕 PDF", "docx": "📘 DOCX", "xlsx": "📗 XLSX",
+                            }
                             st.markdown(
                                 f"Updated: {doc.last_updated or '—'}  \n"
+                                f"Format: {_dq_fmt_icons.get(doc.source_format, doc.source_format)}  \n"
                                 f"File: `{doc.source_file}`"
                             )
                     st.markdown("---")
