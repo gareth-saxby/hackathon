@@ -174,8 +174,8 @@ if tab_choice == "🔍 Search":
                     )
                     if r.matching_terms:
                         terms_html = " ".join(
-                            f'<code style="background:#e8f4f8;padding:1px 5px;'
-                            f'border-radius:3px;font-size:0.85em">{t}</code>'
+                            f'<code style="background:#1d70b8;color:#ffffff;'
+                            f'padding:2px 7px;border-radius:4px;font-size:0.85em">{t}</code>'
                             for t in r.matching_terms
                         )
                         st.markdown(
