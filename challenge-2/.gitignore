@@ -1,0 +1,6 @@
+pip.ini
+.venv/
+__pycache__/
+*.pyc
+src/__pycache__/
+data/extracted/
